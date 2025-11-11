@@ -1,0 +1,10 @@
+project_root: "/scratch/grp/msc_appbio/DCDM/Group2"
+
+raw_data: "/scratch/grp/msc_appbio/DCDM/Group2/raw_data"
+raw_data_backup: "/scratch/grp/msc_appbio/DCDM/Group2/raw_data_backup"
+
+outputs: "/scratch/grp/msc_appbio/DCDM/Group2/outputs"
+
+scripts: "/scratch/grp/msc_appbio/DCDM/Group2/scripts"
+notebooks: "/scratch/grp/msc_appbio/DCDM/Group2/notebooks"
+config: "/scratch/grp/msc_appbio/DCDM/Group2/config"
