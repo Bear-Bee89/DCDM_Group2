@@ -1,0 +1,165 @@
+---
+title: "RMD_rawdata_establish"
+author: "zach"
+date: "2025-11-18"
+output: html_document
+---
+
+###Step_1: Merge all the raw data csv files (Bash script)
+
+```{r}
+#!/bin/bash
+# IMPC (key,value)
+
+# Define output file name
+out="combined_data.csv"
+
+# Write header row to the output file
+echo "file,gene_accession_id,gene_symbol,mouse_strain,mouse_life_stage,parameter_id,pvalue,parameter_name,analysis_id" > "$out"
+
+# Initialize counter for processed files
+count=0
+
+# Loop through all CSV files in the "data" directory
+for f in data/*.csv; do
+
+# Extract the base filename
+  file=$(basename "$f")
+
+# Initialize variables for each field
+  gene_accession_id=""
+  gene_symbol=""
+  mouse_strain=""
+  mouse_life_stage=""
+  parameter_id=""
+  pvalue=""
+  parameter_name=""
+  analysis_id=""
+  
+# Read each line of the CSV file as key,value pairs
+  while IFS=, read -r key value; do
+  
+# lowercase and remove spaces
+  key=$(echo "$key" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+  
+# Match key against expected fields and assign value
+  case "$key" in
+      gene_accession_id) gene_accession_id="$value" ;;
+      gene_symbol) gene_symbol="$value" ;;
+      mouse_strain) mouse_strain="$value" ;;
+      mouse_life_stage) mouse_life_stage="$value" ;;
+      parameter_id) parameter_id="$value" ;;
+      pvalue) pvalue="$value" ;;
+      parameter_name) parameter_name="$value" ;;
+      analysis_id) analysis_id="$value" ;;
+    esac
+  done < "$f"
+
+# Append a new row to the output file with collected values
+  echo "$file,$gene_accession_id,$gene_symbol,$mouse_strain,$mouse_life_stage,$parameter_id,$pvalue,$parameter_name,$analysis_id" >> "$out"
+
+  count=$((count+1))
+  
+# Print progress message every 1000 files
+  if (( $count % 1000 == 0 )); then
+    echo "Processed $count files..."
+  fi
+done
+
+#Show total lines written and absolute path of output file
+echo "Merge completed: $(wc -l < $out) lines written to $(realpath $out)"
+
+```
+
+###Step 2: Match with SOP (R script)
+
+```{r}
+library(dplyr)
+library(stringr)
+library(readr)
+
+# read files
+rawdata <- read_csv("combined_data.csv")
+sop <- read_csv("IMPC_SOP.csv")
+
+# clean every columns
+
+# 1 analysis_id
+rawdata <- rawdata %>%
+  mutate(
+    analysis_id = str_trim(analysis_id),
+    analysis_id = ifelse(str_detect(analysis_id, "^[A-Za-z0-9]{15}$"), analysis_id, NA)
+  )
+
+# 2 gene_accession_id (all upper-case)
+rawdata <- rawdata %>%
+  mutate(
+    gene_accession_id = str_to_upper(str_trim(gene_accession_id)),
+    gene_accession_id = ifelse(str_detect(gene_accession_id, "^MGI:\\d{5,7}$"), gene_accession_id, NA)
+  )
+
+# 3 gene_symbol
+rawdata <- rawdata %>%
+  mutate(
+    gene_symbol = str_to_title(str_trim(gene_symbol)),
+    gene_symbol = ifelse(str_length(gene_symbol) >= 1 & str_length(gene_symbol) <= 13, gene_symbol, NA)
+  )
+
+# 4 mouse_strain
+valid_strains <- c("C57BL","B6J","C3H","129SV")
+rawdata <- rawdata %>%
+  mutate(
+    mouse_strain = str_trim(mouse_strain),
+    mouse_strain = ifelse(mouse_strain %in% valid_strains, mouse_strain, NA)
+  )
+
+# 5 mouse_life_stage
+embryo_stages <- c("E12.5","E15.5","E18.5","E9.5")
+rawdata <- rawdata %>%
+  mutate(
+    mouse_life_stage = str_trim(mouse_life_stage),
+    mouse_life_stage = case_when(
+      # embryo_stage
+      toupper(mouse_life_stage) %in% toupper(embryo_stages) ~
+        embryo_stages[match(toupper(mouse_life_stage), toupper(embryo_stages))],
+      # adult_stage
+      str_to_lower(mouse_life_stage) == "early adult" ~ "Early adult",
+      str_to_lower(mouse_life_stage) == "late adult" ~ "Late adult",
+      str_to_lower(mouse_life_stage) == "middle aged adult" ~ "Middle aged adult",
+      TRUE ~ mouse_life_stage
+    ),
+    # final check
+    mouse_life_stage = ifelse(
+      mouse_life_stage %in% c(embryo_stages, "Early adult","Late adult","Middle aged adult") &
+      str_length(mouse_life_stage) >= 4 & str_length(mouse_life_stage) <= 17,
+      mouse_life_stage, NA
+    )
+  )
+
+# 6 parameter_id: SOP (all upper-case)
+rawdata <- rawdata %>%
+  mutate(
+    parameter_id = str_to_upper(str_trim(parameter_id)),
+    parameter_id = ifelse(str_length(parameter_id) >= 15 & str_length(parameter_id) <= 20, parameter_id, NA)
+  )
+
+# 7 parameter_name: length 2–74
+rawdata <- rawdata %>%
+  mutate(
+    parameter_name = str_trim(parameter_name),
+    parameter_name = ifelse(str_length(parameter_name) >= 2 & str_length(parameter_name) <= 74, parameter_name, NA)
+  )
+
+# 8 pvalue: Compatible with scientific notation + range 0–1
+rawdata <- rawdata %>%
+  mutate(
+    pvalue = readr::parse_number(as.character(pvalue)),
+    pvalue = ifelse(!is.na(pvalue) & pvalue >= 0 & pvalue <= 1, pvalue, NA)
+  )
+
+# Export file
+write_csv(rawdata, "IMPC_cleaned.csv")
+
+
+```
+
