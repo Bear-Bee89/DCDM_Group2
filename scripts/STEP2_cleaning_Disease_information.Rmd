@@ -1,0 +1,65 @@
+---
+title: "cleaning_disease_information"
+output: html_notebook
+---
+
+install required libraries and read disease_information.csv as a dataframe
+
+```{r}
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(readr)
+
+df <- read_csv("Disease_information.csv")
+```
+
+cleaning the data
+
+```{r}
+clean <- df %>%
+  # standardize colume name
+  rename_with(~ str_replace_all(.x, " ", "_")) %>%
+  rename_with(tolower) %>%
+
+  # remove space
+  mutate(across(everything(), ~ str_trim(.))) %>%
+
+  # standardize id format
+  mutate(
+    do_disease_id = toupper(do_disease_id),
+    mouse_mgi_id = toupper(mouse_mgi_id)
+  ) %>%
+
+  # Split the omim_ids into multiple lines (each OMIM on a separate line) using '|' as the delimiter
+  separate_rows(omim_ids, sep = "\\|") %>%
+
+  # Remove empty strings and remove spaces
+  mutate(omim = str_trim(omim_ids)) %>%
+  filter(!is.na(omim) & omim != "") %>%
+
+  # remove duplicate
+  distinct(mouse_mgi_id, do_disease_id, do_disease_name, omim, .keep_all = FALSE) %>%
+
+  # keep needed columes
+  select(mouse_mgi_id, do_disease_id, do_disease_name, omim)
+
+# view result
+print(head(clean, 10))
+
+#check to make sure the cleaning worked as intended
+clean %>%
+  filter(str_detect(omim, "\\|")) %>%
+  nrow()
+
+summary(clean$omim)
+summary(clean$mouse_mgi_id)
+summary(clean$do_disease_id)
+
+```
+
+export cleaned data
+
+```{r}
+write_csv(clean, "Disease_information_cleaned2.csv")
+```
