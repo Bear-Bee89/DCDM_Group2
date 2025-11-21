@@ -40,7 +40,7 @@ df$description <- gsub(" ", " ", df$description, fixed = TRUE)
 df$description <- tolower(df$description)
 ```
 
-check for duplicates and if any, deleting them
+check for duplicates and if any, delete them
 
 ```{r}
 sum(duplicated(df))
