@@ -7,12 +7,9 @@ output: html_document
 
 cleaning the IMPC_Procedure.csv file and saving the cleaned version as IMPC_Procedure_CLEAN.csv
 
-setting the working directory and stating input/output file names
+state input/output file names
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-setwd("/Users/Manu/Desktop/DCDM/Group2/")
-
 input_file <- "IMPC_Procedure.csv"
 output_file <- "IMPC_Procedure_CLEAN.csv"
 ```
@@ -43,7 +40,7 @@ df$description <- gsub(" ", " ", df$description, fixed = TRUE)
 df$description <- tolower(df$description)
 ```
 
-check for duplicates and if any, delete them
+check for duplicates and if any, deleting them
 
 ```{r}
 sum(duplicated(df))
