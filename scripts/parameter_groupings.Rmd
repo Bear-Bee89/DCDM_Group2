@@ -1,0 +1,208 @@
+---
+title: "IMPC_Parameter_Grouping"
+date: "2025-11-15"
+output: html_document
+---
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# overview
+
+this document categorizes IMPC parameters into functional groups based on:
+
+1.  **naming similarity** - keyword matching on parameter names and descriptions
+2.  **phenotype test similarity** - procedure codes (IMPC_XXX)
+
+the goal is to reduce the parameter space by grouping related parameters together.
+
+we noticed in our combined rawdata file, that there were additional non-IMPC parameters. we chose to include these in the groupings as they have a parameter name, so some could be grouped.
+
+# data preparation
+
+load required libraries
+
+```{r}
+library(tidyverse)
+library(dplyr)
+```
+
+read and load data
+
+```{r}
+param_desc <- read.csv("IMPC_parameter_description_cleaned.csv", 
+                       stringsAsFactors = FALSE)
+impc_data <- read.csv("IMPC_cleaned3.csv", 
+                      stringsAsFactors = FALSE)
+```
+
+display initial counts + unique counts to double check
+
+```{r}
+# display initial counts
+cat(sprintf("Parameter description file has %d rows\n", nrow(param_desc))) #5311
+cat(sprintf("IMPC data file has %d rows\n", nrow(impc_data))) #20288
+
+
+# get unique parameter IDs from both files
+existing_param_ids <- unique(param_desc$parameterId)
+all_param_ids <- unique(impc_data$parameter_id)
+
+cat(sprintf("Unique parameter IDs in description file: %d\n", length(existing_param_ids))) #3600
+cat(sprintf("Unique parameter IDs in IMPC data file: %d\n", length(all_param_ids))) #144
+```
+
+identify missing parameters and prepare new rows
+
+```{r}
+new_rows <- cleaned_data %>%
+  # select relevant columns and rename to match target file
+  select(parameterId = parameter_id, name = parameter_name) %>%
+  distinct() %>%
+  # keep only IDs that are NOT in the current description file
+  filter(!parameterId %in% desc_data$parameterId) %>%
+  # add the missing columns with literal NA
+  mutate(
+    description = NA,
+    impcParameterOrigId = NA
+  )
+```
+
+append to the original data and save the output
+
+```{r}
+updated_param_data <- bind_rows(desc_data, new_rows)
+
+write_csv(updated_param_data, "IMPC_parameter_description_cleaned_withexternals.csv")
+```
+
+# creating the groupings
+
+read the new file with the external paramter IDs
+
+```{r}
+params <- read.csv("IMPC_parameter_description_cleaned_withexternals.csv",
+                   stringsAsFactors = FALSE)
+```
+
+extract IMPC procedure codes from parameter IDs
+
+```{r}
+params$procedure_code <- str_extract(params$parameterId, "IMPC_[A-Z]+")
+params$groupings <- NA_character_ #creates a new column called groupings
+```
+
+define keyword rules for each grouping
+
+```{r}
+keyword_rules <- list(
+  "Weight" = c("weight", "weights"),
+  
+  "Imaging" = c("image", "imaging", "photo", "picture", "x-ray", "xray", 
+                "radiograph", "showcase"),
+  
+  "Brain" = c("brain", "cerebral", "cerebellum", "hippocampus", "cortex", 
+              "neural", "neuron", "midbrain", "forebrain", "hindbrain",
+              "brainstem", "thalamus", "striatum"),
+  
+  "Clinical_Chemistry" = c("glucose", "cholesterol", "triglyceride", "sodium", 
+                           "potassium", "calcium", "chloride", "phosphate",
+                           "enzyme", "alkaline phosphatase", "bilirubin", 
+                           "albumin", "protein", "creatinine", "urea",
+                           "insulin"),
+  
+  "Optics" = c("\\beye\\b", "lens", "retina", "cornea", "iris", "pupil", 
+               "vitreous", "vision", "ophthalm", "visual", "ocular"),
+  
+  "Behaviour" = c("behavior", "behavioural", "locomotor", "activity", 
+                  "open field", "grip", "anxiety", "fear",
+                  "movement", "exploration"),
+  
+  "Haematology" = c("blood cell", "hemoglobin", "erythrocyte", 
+                    "leukocyte", "platelet", "wbc", "rbc", "lymphocyte",
+                    "neutrophil", "monocyte", "eosinophil"),
+  
+  "Cardiovascular" = c("heart", "cardiac", "ecg", "echo", "cardiovascular",
+                       "vessel", "aorta", "ventricle", "atrial", "blood pressure",
+                       "\\bhr\\b", "heart rate"),
+  
+  "Morphology" = c("morphology", "dysmorphology", "tail.morphology", 
+                   "limb.morphology", "craniofacial", "skeletal",
+                   "coat.color", "skin.appearance")
+)
+```
+
+apply keyword matching
+
+```{r}
+for (category in names(keyword_rules)) {
+  patterns <- keyword_rules[[category]]
+  pattern_combined <- paste0("(", paste(patterns, collapse = "|"), ")")
+  
+  matches_name <- grepl(pattern_combined, params$name, ignore.case = TRUE)
+  matches_desc <- grepl(pattern_combined, params$description, ignore.case = TRUE)
+  matches <- matches_name | matches_desc
+  
+  uncategorized <- is.na(params$groupings)
+  params$groupings[matches & uncategorized] <- category
+}
+
+step1_count <- sum(!is.na(params$groupings)) #1022 parameters categorized
+```
+
+as many remain uncategorized, we defined a few procedure code mappings manually to catch more
+
+```{r}
+procedure_mapping <- list(
+  "Optics" = c("IMPC_EYE"),
+  "Imaging" = c("IMPC_XRY"),
+  "Cardiovascular" = c("IMPC_ECG", "IMPC_ECH"),
+  "Behaviour" = c("IMPC_OFD"),
+  "Haematology" = c("IMPC_HEM"),
+  "Clinical_Chemistry" = c("IMPC_CBC"),
+  "Morphology" = c("IMPC_CSD")
+)
+```
+
+apply procedure code mapping to uncategorized parameters
+
+```{r}
+for (category in names(procedure_mapping)) {
+  codes <- procedure_mapping[[category]]
+  matches <- params$procedure_code %in% codes
+  uncategorized <- is.na(params$groupings)
+  
+  params$groupings[matches & uncategorized] <- category
+}
+
+step2_count <- sum(!is.na(params$groupings)) - step1_count #670 additional parameters categorized
+```
+
+label any remaining as uncategorized
+
+```{r}
+params$groupings[is.na(params$groupings)] <- "Uncategorized"
+
+step3_count <- sum(params$groupings == "Uncategorized") #3619 parameters remain uncategorized
+```
+
+category distribution to roughly see how many we have in each
+
+```{r}
+category_summary <- params %>%
+  count(groupings, sort = TRUE) %>%
+  mutate(percentage = round(n / nrow(params) * 100, 1)) %>%
+  rename(Category = groupings, Count = n, Percentage = percentage)
+
+knitr::kable(category_summary, 
+             caption = "Distribution of Parameters by Category")
+```
+
+# save final output
+
+save the categorized parameters with the new `groupings` column
+
+```{r}
+write.csv(params, "IMPC_parameter_groupings.csv", row.names = FALSE)
+```
