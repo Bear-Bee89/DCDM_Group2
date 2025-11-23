@@ -1,0 +1,72 @@
+---
+title: "cleaning_parameter_description"
+author: Victor Ng
+output: html_document
+date: "2025-11-15"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+load libraries
+```{r}
+library(dplyr)
+library(readr)
+library(stringr)
+```
+
+read IMPC parameter description txt file 
+```{r}
+df_raw <- read_csv(
+  "IMPC_parameter_description.txt",
+  col_names = TRUE,
+  trim_ws = FALSE
+)
+```
+
+initial cleaning
+```{r}
+df_clean <- df_raw %>%
+  # trim whitespace for all columns
+  mutate(across(everything(), ~str_trim(.x))) %>% 
+  
+  # convert empty strings to NA but only for character columns
+  mutate(across(where(is.character), ~na_if(.x, ""))) %>% 
+  
+  # remove duplicate rows
+  distinct()
+```
+
+standardise missing values in character columns
+```{r}
+df_clean <- df_clean %>%
+  mutate(across(
+    where(is.character),
+    ~ {
+      x <- str_trim(.)                         # remove whitespace
+      x <- ifelse(tolower(x) %in% c("na", "n/a", "null", ""), NA, x)
+      x
+    }
+  ))
+```
+
+remove random characters
+```{r}
+f_clean <- df_clean %>%
+mutate(across(where(is.character), ~ gsub("\\^", "", .)))
+```
+
+check if any duplicates remain
+```{r}
+any(duplicated(df_clean))
+```
+
+
+write the output file
+```{r}
+write.csv(df_clean,
+          file = "IMPC_parameter_description_cleaned.csv",
+          row.names = FALSE)
+```
+
