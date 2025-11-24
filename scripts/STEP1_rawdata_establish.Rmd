@@ -7,7 +7,7 @@ output: html_document
 
 ###Step_1: Merge all the raw data csv files (Bash script)
 
-```{r}
+```{bash}
 #!/bin/bash
 # IMPC (key,value)
 
@@ -162,6 +162,7 @@ write_csv(rawdata, "IMPC_cleaned3.csv")
 
 
 ```
+
 
 
 
