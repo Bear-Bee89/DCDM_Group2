@@ -1,0 +1,538 @@
+---
+title: "Clean data, loading prep for DCDM_IMPC_Group2 database"
+output: html_document
+date: "2025-11-15"
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{sql}
+CREATE DATABASE DCDM_IMPC_Group2;
+
+CREATE TABLE Genes (
+gene_accession_id VARCHAR(20) PRIMARY KEY,
+gene_symbol VARCHAR(50)
+);
+
+CREATE TABLE Diseases (
+disease_id VARCHAR(50) PRIMARY KEY,
+disease_term VARCHAR(255),
+omim_id VARCHAR(20)
+);
+
+CREATE TABLE GeneDiseases ( 
+gene_accession_id VARCHAR(20),
+disease_id VARCHAR(50),
+PRIMARY KEY (gene_accession_id, disease_id),
+FOREIGN KEY (gene_accession_id) REFERENCES Genes(gene_accession_id),
+FOREIGN KEY (disease_id) REFERENCES Diseases(disease_id),
+INDEX idx_disease_lookup (disease_id)
+);
+
+CREATE TABLE DiseaseOmim (
+disease_id VARCHAR(50),
+omim_id VARCHAR(20),
+PRIMARY KEY (disease_id, omim_id),
+FOREIGN KEY (disease_id) REFERENCES Diseases(disease_id),
+INDEX idx_omim_lookup (omim_id)
+);
+
+CREATE TABLE Procedures (
+procedure_id INT PRIMARY KEY,
+procedure_name VARCHAR(255),
+procedure_description TEXT,
+is_mandatory VARCHAR(5)
+);
+
+
+CREATE TABLE Parameters (
+parameter_id VARCHAR(20) PRIMARY KEY,
+parameter_name VARCHAR(255),
+parameter_description TEXT,
+category VARCHAR(50)
+);
+
+
+CREATE TABLE ParameterOrigMap (
+impcParameterOrigId INT PRIMARY KEY,
+parameter_id VARCHAR(20),
+procedure_id INT,
+FOREIGN KEY (parameter_id) REFERENCES Parameters(parameter_id),
+FOREIGN KEY (procedure_id) REFERENCES Procedures(procedure_id)
+);
+
+CREATE TABLE Analyses (
+analysis_id VARCHAR(20) NOT NULL,
+gene_accession_id VARCHAR(20),
+mouse_strain VARCHAR(20),
+mouse_life_stage VARCHAR(25),
+parameter_id VARCHAR(20),
+p_value DOUBLE PRECISION,
+PRIMARY KEY (analysis_id),
+FOREIGN KEY (gene_accession_id) REFERENCES Genes(gene_accession_id),
+FOREIGN KEY (parameter_id) REFERENCES Parameters(parameter_id),
+INDEX idx_analysis_gene (gene_accession_id),
+	INDEX idx_analysis_param (parameter_id)
+);
+```
+
+### Load packages required for the transformations
+
+```{r}
+library(tidyverse)  
+library(dplyr)
+library(readr)
+```
+
+### Set working directory
+
+```{r}
+setwd("/Users/bear/Desktop/DCDM_25_26/Coursework/CLEAN_DATA")
+```
+
+### Load files
+
+```{r}
+# Load all cleaned data tables for database import
+procedure  <- read_csv("./IMPC_Procedure_CLEAN.csv")
+disease    <- read_csv("./Disease_information_cleaned2.csv")
+analysis   <- read_csv("./IMPC_cleaned3.csv")   
+parameters <- read_csv("./IMPC_parameter_groupings.csv")
+```
+
+### 1. Analysis table for SQL from "IMPC_cleaned3.csv"
+
+This large table being read has already undergone collation form
+individual per-analysis and further sanity cleaning for duplicates,
+errors and in accordance with the SOP
+
+```{r}
+analyses_for_sql <- analysis %>%
+  transmute(
+    analysis_id       = analysis_id,
+    gene_accession_id = gene_accession_id,
+    mouse_strain      = mouse_strain,
+    mouse_life_stage  = mouse_life_stage,
+    parameter_id      = parameter_id,
+    p_value           = pvalue
+  ) %>%
+  # drop rows with missing critical fields
+  filter(
+    !is.na(analysis_id),
+    !is.na(gene_accession_id),
+    !is.na(parameter_id),
+    !is.na(p_value)
+  )
+
+write_csv(analyses_for_sql, "Analyses_for_SQL.csv")
+```
+
+## 2. Build conceptual Procedures table (one row per procedure)
+
+This section creates a clean, normalised **Procedures** table with one
+unique row per conceptual procedure. The original data may contain
+duplicate procedure entries across different parameters, so we
+consolidate these into a single reference table.
+
+**Key steps:**
+
+1.  **Data cleaning**: Trims whitespace from procedure names and
+    standardises various representations of missing values (empty
+    strings, "NA", "N/A", etc.) to proper `NA` values
+
+2.  **Deduplication**: Groups by the combination of procedure name,
+    description, and mandatory flag to identify unique procedures,
+    eliminating redundant entries
+
+3.  **ID assignment**: Generates a unique sequential `procedure_id` for
+    each distinct procedure to serve as a primary key
+
+4.  **Output**: Creates a normalised table with four columns:
+
+    -   `procedure_id` - Unique identifier for each procedure
+    -   `procedure_name` - Cleaned procedure name
+    -   `procedure_description` - Standardised description (or NA if
+        missing)
+    -   `is_mandatory` - Boolean flag indicating if the procedure is
+        required
+
+This table structure follows database normalisation principles and can
+be directly imported into SQL databases. The resulting CSV serves as the
+foundation for linking parameters to their associated procedures through
+a separate relationship table.
+
+```{r}
+
+# Clean up name/description, standardise NA-like values
+procedure_clean <- procedure %>%
+  mutate(
+    proc_name_clean = trimws(name),
+    proc_desc_clean = description,
+    proc_desc_clean = if_else(
+      proc_desc_clean %in% c("", " ", "NA", "na", "Na", "N/A"),
+      NA_character_,
+      proc_desc_clean
+    ),
+    isMandatory = as.logical(isMandatory)
+  )
+
+# One row per conceptual procedure 
+procedures_for_sql <- procedure_clean %>%
+  group_by(proc_name_clean, proc_desc_clean, isMandatory) %>%
+  summarise(.groups = "drop") %>%
+  arrange(proc_name_clean) %>%
+  mutate(
+    procedure_id          = row_number(),
+    procedure_name        = proc_name_clean,
+    procedure_description = proc_desc_clean,
+    is_mandatory          = isMandatory
+  ) %>%
+  select(procedure_id, procedure_name, procedure_description, is_mandatory)
+
+# This corresponds to SQL:
+# CREATE TABLE Procedures (
+#   procedure_id          INT PRIMARY KEY,
+#   procedure_name        VARCHAR(255),
+#   procedure_description TEXT,
+#   is_mandatory          BOOLEAN
+# );
+
+write_csv(procedures_for_sql, "Procedures_for_SQL.csv")
+
+```
+
+## 3. Creating the Parameter-Procedure Mapping Table
+
+This section builds the **ParameterOrigMap** table, which serves as a bridge table linking individual IMPC parameter instances to their associated procedures. This mapping layer is essential because the raw data contains technical identifiers (`impcParameterOrigId`) that need to be connected to both the conceptual parameters and the procedures they belong to.
+
+**Key steps:**
+
+1. **IMPC parameter filtering**: Restricts mapping to only genuine IMPC parameters that have valid `impcParameterOrigId` values, excluding external/non-IMPC parameters which lack this internal identifier
+
+2. **Procedure ID lookup**: Joins the cleaned procedure data with the normalised Procedures table, matching each parameter instance to its corresponding `procedure_id` using the combination of procedure name, description, and mandatory status
+
+3. **Mapping deduplication**: Extracts unique (impcParameterOrigId, procedure_id) relationships, removing any duplicate mappings that may exist in the raw data
+
+4. **Complete linkage table**: Combines procedure mappings with parameter identifiers to create a three-way junction table connecting:
+   - `impcParameterOrigId` - Technical/internal unique identifier for IMPC parameters only
+   - `parameter_id` - Conceptual parameter this instance represents
+   - `procedure_id` - Procedure this parameter instance belongs to
+
+**Important note**: External parameters identified in the analysis data (those without IMPC metadata) are intentionally excluded from this table since they lack `impcParameterOrigId` values and have no associated procedure information.
+
+**Purpose**: This table maintains the many-to-many relationship between parameters and procedures at the instance level, enabling queries such as "which procedures measure body weight?" or "what parameters are collected in the open field test?" The filtering ensures referential integrity by only mapping parameters that exist in the IMPC system.
+```{r}
+
+
+# Build procedure mapping (IMPC parameters only)
+proc_map <- procedure_clean %>%
+  filter(!is.na(impcParameterOrigId)) %>%
+  left_join(
+    procedures_for_sql,
+    by = c("proc_name_clean" = "procedure_name",
+           "proc_desc_clean" = "procedure_description",
+           "isMandatory" = "is_mandatory")
+  ) %>%
+  select(impcParameterOrigId, procedure_id) %>%
+  distinct()
+
+# Create complete parameter-procedure mapping
+parameter_orig_map <- parameters %>%
+  filter(!is.na(impcParameterOrigId)) %>%
+  select(impcParameterOrigId, parameterId) %>%
+  distinct() %>%
+  left_join(proc_map, by = "impcParameterOrigId") %>%
+  rename(parameter_id = parameterId)
+
+# SQL target:
+# CREATE TABLE ParameterOrigMap (
+#   impcParameterOrigId INT PRIMARY KEY,
+#   parameter_id        VARCHAR(20),
+#   procedure_id        INT,
+#   FOREIGN KEY (parameter_id) REFERENCES Parameters(parameter_id),
+#   FOREIGN KEY (procedure_id) REFERENCES Procedures(procedure_id)
+# );
+
+write_csv(parameter_orig_map, "ParameterOrigMap_for_SQL.csv")
+
+```
+
+## 4. Building the Parameters Table
+
+This section creates the final **Parameters** reference table by
+consolidating parameters with their assigned groupings.
+
+**Key steps:**
+
+**IMPC parameter aggregation**: Collapses the grouped parameter data
+    to one row per unique `parameter_id`, retaining the first occurrence
+    of name, description, and grouping category for each parameter
+
+**Purpose**: Ensures every parameter referenced in downstream tables has
+a corresponding entry, preventing foreign key violations while
+preserving the semantic groupings derived from the grouping algorithm.
+
+```{r}
+
+# 4a. IMPC-based parameters, one row per parameterId
+parameters_deduped <- parameters %>%
+  group_by(parameterId) %>%
+  summarise(
+    parameter_name        = first(name),
+    parameter_description = first(description),
+    groupings              = first(groupings),
+    .groups = "drop"
+  ) %>%
+  rename(parameter_id = parameterId)
+
+# 4b. Final Parameters table for SQL
+parameters_for_sql <- parameters_deduped %>%
+  select(parameter_id, parameter_name, parameter_description, groupings)
+
+# Write to CSV
+write_csv(parameters_for_sql, "Parameters_for_SQL.csv")
+
+```
+
+## 5. Building the Genes Table
+
+This section builds a comprehensive **Genes** reference table by
+consolidating gene identifiers from both the analysis and disease
+datasets, ensuring one unique row per gene accession ID.
+
+**Key steps:**
+
+1.  **Analysis gene extraction**: Extracts gene accession IDs and
+    symbols from the analysis table, cleaning whitespace and filtering
+    out missing/invalid entries
+
+2.  **Disease gene extraction**: Retrieves additional gene IDs from the
+    disease table (which uses `mouse_mgi_id` as the identifier),
+    converting them to the standard `gene_accession_id` format
+
+3.  **Deduplication with symbol preservation**: Merges both sources and
+    collapses to one row per gene ID. When multiple entries exist for
+    the same gene, prioritises non-NA gene symbols to retain the most
+    informative data
+
+4.  **Data cleaning**: Converts literal "NA" strings to proper R `NA`
+    values for consistency
+
+**Output structure:** - `gene_accession_id` = MGI identifier (primary
+key) - `gene_symbol` = Gene symbol when available, NA otherwise
+
+**Purpose**: Creates a master gene reference table that consolidates all
+gene identifiers used across the dataset, ensuring every gene mentioned
+in analysis results or disease associations has a single  entry
+with the best available symbol information.
+
+```{r}
+
+# 1) Genes from analysis 
+genes_from_analysis <- analysis %>%
+  mutate(
+    gene_accession_id = str_trim(gene_accession_id),
+    gene_symbol       = str_trim(gene_symbol)
+  ) %>%
+  filter(!is.na(gene_accession_id),
+         gene_accession_id != "",
+         gene_accession_id != "NA") %>%
+  select(gene_accession_id, gene_symbol)
+
+# 2) Genes from disease (ID only, no symbol)
+genes_from_disease <- disease %>%
+  mutate(mouse_mgi_id = str_trim(mouse_mgi_id)) %>%
+  filter(!is.na(mouse_mgi_id),
+         mouse_mgi_id != "",
+         mouse_mgi_id != "NA") %>%
+  transmute(
+    gene_accession_id = mouse_mgi_id,
+    gene_symbol       = NA_character_
+  )
+
+# 3) Combine and collapse to ONE ROW per gene_accession_id
+genes_for_sql <- bind_rows(genes_from_analysis, genes_from_disease) %>%
+  group_by(gene_accession_id) %>%
+  summarise(
+    gene_symbol = {
+      non_na <- na.omit(gene_symbol)
+      if (length(non_na) == 0) NA_character_ else non_na[1]
+    },
+    .groups = "drop"
+  ) %>%
+  # convert literal "NA" strings to real NAs
+  mutate(across(everything(), ~ na_if(., "NA")))
+
+# Sanity check: no duplicates now
+dup_genes <- genes_for_sql %>%
+  count(gene_accession_id) %>%
+  filter(n > 1)
+
+print(dup_genes)  # should be empty
+
+# 4) Write fresh CSV
+write_csv(genes_for_sql, "Genes_for_SQL_final.csv")
+```
+
+## 6. Building the Diseases Table
+
+This section creates the **Diseases** reference table with one unique
+row per disease ontology identifier (DOID), extracted from the disease
+association dataset.
+
+**Key steps:**
+
+1.  **Disease extraction**: Selects disease IDs and their corresponding
+    disease terms/names from the disease table
+
+2.  **Deduplication**: Groups by disease ID and retains the first
+    occurrence of the disease name, handling cases where the same
+    disease might appear multiple times with identical information
+
+3.  **Data standardisation**: Renames columns to match SQL conventions
+    and converts literal "NA" strings to proper NA values
+
+**Output structure:** - `disease_id` - Disease Ontology identifier
+(DOID, primary key) - `disease_term` - Human-readable disease name
+
+**Purpose**: Provides a normalised reference table for all diseases
+mentioned in the dataset. This table serves as the foundation for
+disease-gene associations and disease-OMIM mappings, ensuring consistent
+disease terminology across the database.
+
+```{r}
+
+diseases_for_sql <- disease %>%
+  select(do_disease_id, do_disease_name) %>%
+  group_by(do_disease_id) %>%
+  summarise(
+    disease_term = first(do_disease_name),
+    .groups = "drop"
+  ) %>%
+  rename(disease_id = do_disease_id) %>%
+  mutate(across(everything(), ~ na_if(., "NA")))
+
+# Sanity: should be NO duplicates now
+# diseases_for_sql %>% count(disease_id) %>% filter(n > 1)
+
+write_csv(diseases_for_sql, "Diseases_for_SQL.csv")
+# Matches:
+# CREATE TABLE Diseases (
+#   disease_id    VARCHAR(50) PRIMARY KEY,
+#   disease_term  VARCHAR(255)
+# );
+
+```
+
+## 7. Building the Disease-OMIM Mapping Table
+
+This section creates the **DiseaseOmim** junction table that links
+Disease Ontology terms to their corresponding OMIM (Online Mendelian
+Inheritance in Man) identifiers.
+
+**Key steps:**
+
+1.  **OMIM extraction**: Filters the disease table for entries with
+    valid OMIM identifiers, removing empty strings and missing values
+
+2.  **Relationship mapping**: Creates disease-to-OMIM pairs by selecting
+    disease IDs and their associated OMIM codes
+
+3.  **Deduplication**: Ensures unique (disease_id, omim_id) combinations
+    using `distinct()`
+
+4.  **Data cleaning**: Standardises literal "NA" strings to proper NA
+    values
+
+**Output structure:** - `disease_id` = Disease Ontology identifier
+(foreign key to Diseases) - `omim_id` = OMIM identifier for the disease
+
+**Purpose**: Establishes the many : many relationship between diseases
+and OMIM entries. A single disease may have multiple OMIM identifiers,
+and this table captures all such associations, enabling
+cross-referencing between Disease Ontology and OMIM databases for
+enhanced disease annotation.
+
+```{r}
+
+
+disease_omim_for_sql <- disease %>%
+  filter(!is.na(omim), omim != "", omim != "NA") %>%
+  transmute(
+    disease_id = do_disease_id,
+    omim_id    = omim
+  ) %>%
+  distinct() %>%
+  mutate(across(everything(), ~ na_if(., "NA")))
+
+write_csv(disease_omim_for_sql, "DiseaseOmim_for_SQL.csv")
+# Matches:
+# CREATE TABLE DiseaseOmim (
+#   disease_id VARCHAR(50),
+#   omim_id    VARCHAR(20),
+#   PRIMARY KEY (disease_id, omim_id),
+#   FOREIGN KEY (disease_id) REFERENCES Diseases(disease_id)
+# );
+
+```
+
+## 8. Building the Gene-Disease Association Table
+
+This section creates the **GeneDiseases** junction table that maps genes
+to their associated diseases, establishing the many-to-many relationship
+between genetic variants and disease phenotypes.
+
+**Key steps:**
+
+1.  **Association extraction**: Filters disease data for valid
+    gene-disease pairs, extracting MGI gene identifiers and Disease
+    Ontology IDs
+
+2.  **Relationship deduplication**: Removes duplicate gene-disease
+    associations using `distinct()`, as the same association may appear
+    multiple times in the source data
+
+3.  **Referential integrity enforcement**: Uses `semi_join()` to retain
+    only gene IDs that exist in the Genes table, ensuring all foreign
+    key references are valid
+
+4.  **Data standardisation**: Cleans literal "NA" strings and formats
+    columns for SQL import
+
+**Output structure:** - `gene_accession_id` - MGI identifier (foreign
+key to Genes) - `disease_id` - Disease Ontology identifier (foreign key
+to Diseases)
+
+**Purpose**: Captures the known associations between mouse genes and
+human diseases, enabling queries about which genes are implicated in
+specific diseases or which diseases are associated with particular
+genes. The referential integrity check ensures the database remains
+consistent by excluding orphaned associations.
+
+```{r}
+
+gene_diseases_for_sql <- disease %>%
+  filter(!is.na(mouse_mgi_id),
+         mouse_mgi_id != "",
+         mouse_mgi_id != "NA") %>%
+  transmute(
+    gene_accession_id = mouse_mgi_id,
+    disease_id        = do_disease_id
+  ) %>%
+  distinct() %>%
+  # keep only gene IDs that exist in Genes_for_SQL (FK safety)
+  semi_join(genes_for_sql, by = "gene_accession_id") %>%
+  mutate(across(everything(), ~ na_if(., "NA")))
+
+write_csv(gene_diseases_for_sql, "GeneDiseases_for_SQL.csv")
+# Matches:
+# CREATE TABLE GeneDiseases (
+#   gene_accession_id VARCHAR(20),
+#   disease_id        VARCHAR(50),
+#   PRIMARY KEY (gene_accession_id, disease_id),
+#   FOREIGN KEY (gene_accession_id) REFERENCES Genes(gene_accession_id),
+#   FOREIGN KEY (disease_id)        REFERENCES Diseases(disease_id)
+# );
+```
+
