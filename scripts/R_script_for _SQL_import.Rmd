@@ -18,7 +18,6 @@ gene_symbol VARCHAR(50)
 CREATE TABLE Diseases (
 disease_id VARCHAR(50) PRIMARY KEY,
 disease_term VARCHAR(255),
-omim_id VARCHAR(20)
 );
 
 CREATE TABLE GeneDiseases ( 
