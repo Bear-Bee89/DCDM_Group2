@@ -34,7 +34,11 @@ trim_ws <- function(x) gsub("^\\s+|\\s+$", "", x)
 
 df$name <- trim_ws(df$name)
 df$description <- trim_ws(df$description)
+```
 
+replace empty text with NA, standardise spacing inside text and convert text to lowercase 
+
+```{r}
 df$description[df$description == ""] <- NA
 df$description <- gsub(" ", " ", df$description, fixed = TRUE)
 df$description <- tolower(df$description)
