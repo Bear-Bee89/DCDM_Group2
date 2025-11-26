@@ -85,20 +85,20 @@ library(dplyr)
 library(readr)
 ```
 
-### Set working directory
+### Set working directory if files are stored locally
 
 ```{r}
-setwd("/Users/bear/Desktop/DCDM_25_26/Coursework/CLEAN_DATA")
+setwd()
 ```
 
 ### Load files
 
 ```{r}
 # Load all cleaned data tables for database import
-procedure  <- read_csv("./IMPC_Procedure_CLEAN.csv")
-disease    <- read_csv("./Disease_information_cleaned2.csv")
-analysis   <- read_csv("./IMPC_cleaned3.csv")   
-parameters <- read_csv("./IMPC_parameter_groupings.csv")
+procedure  <- read_csv("IMPC_Procedure_CLEAN.csv")
+disease    <- read_csv("Disease_information_cleaned2.csv")
+analysis   <- read_csv("IMPC_cleaned3.csv")   
+parameters <- read_csv("IMPC_parameter_groupings.csv")
 ```
 
 ### 1. Analysis table for SQL from "IMPC_cleaned3.csv"
@@ -147,15 +147,6 @@ consolidate these into a single reference table.
 
 3.  **ID assignment**: Generates a unique sequential `procedure_id` for
     each distinct procedure to serve as a primary key
-
-4.  **Output**: Creates a normalised table with four columns:
-
-    -   `procedure_id` - Unique identifier for each procedure
-    -   `procedure_name` - Cleaned procedure name
-    -   `procedure_description` - Standardised description (or NA if
-        missing)
-    -   `is_mandatory` - Boolean flag indicating if the procedure is
-        required
 
 This table structure follows database normalisation principles and can
 be directly imported into SQL databases. The resulting CSV serves as the
@@ -214,14 +205,10 @@ This section builds the **ParameterOrigMap** table, which serves as a bridge tab
 
 3. **Mapping deduplication**: Extracts unique (impcParameterOrigId, procedure_id) relationships, removing any duplicate mappings that may exist in the raw data
 
-4. **Complete linkage table**: Combines procedure mappings with parameter identifiers to create a three-way junction table connecting:
-   - `impcParameterOrigId` - Technical/internal unique identifier for IMPC parameters only
-   - `parameter_id` - Conceptual parameter this instance represents
-   - `procedure_id` - Procedure this parameter instance belongs to
+4. **Complete linkage table**: Combines procedure mappings with parameter identifiers to create a three-way junction table
 
 **Important note**: External parameters identified in the analysis data (those without IMPC metadata) are intentionally excluded from this table since they lack `impcParameterOrigId` values and have no associated procedure information.
 
-**Purpose**: This table maintains the many-to-many relationship between parameters and procedures at the instance level, enabling queries such as "which procedures measure body weight?" or "what parameters are collected in the open field test?" The filtering ensures referential integrity by only mapping parameters that exist in the IMPC system.
 ```{r}
 
 
@@ -269,10 +256,6 @@ consolidating parameters with their assigned groupings.
     to one row per unique `parameter_id`, retaining the first occurrence
     of name, description, and grouping category for each parameter
 
-**Purpose**: Ensures every parameter referenced in downstream tables has
-a corresponding entry, preventing foreign key violations while
-preserving the semantic groupings derived from the grouping algorithm.
-
 ```{r}
 
 # 4a. IMPC-based parameters, one row per parameterId
@@ -308,8 +291,7 @@ datasets, ensuring one unique row per gene accession ID.
     out missing/invalid entries
 
 2.  **Disease gene extraction**: Retrieves additional gene IDs from the
-    disease table (which uses `mouse_mgi_id` as the identifier),
-    converting them to the standard `gene_accession_id` format
+    disease table 
 
 3.  **Deduplication with symbol preservation**: Merges both sources and
     collapses to one row per gene ID. When multiple entries exist for
@@ -318,14 +300,6 @@ datasets, ensuring one unique row per gene accession ID.
 
 4.  **Data cleaning**: Converts literal "NA" strings to proper R `NA`
     values for consistency
-
-**Output structure:** - `gene_accession_id` = MGI identifier (primary
-key) - `gene_symbol` = Gene symbol when available, NA otherwise
-
-**Purpose**: Creates a master gene reference table that consolidates all
-gene identifiers used across the dataset, ensuring every gene mentioned
-in analysis results or disease associations has a single  entry
-with the best available symbol information.
 
 ```{r}
 
@@ -364,12 +338,12 @@ genes_for_sql <- bind_rows(genes_from_analysis, genes_from_disease) %>%
   # convert literal "NA" strings to real NAs
   mutate(across(everything(), ~ na_if(., "NA")))
 
-# Sanity check: no duplicates now
+# no duplicates now
 dup_genes <- genes_for_sql %>%
   count(gene_accession_id) %>%
   filter(n > 1)
 
-print(dup_genes)  # should be empty
+print(dup_genes)
 
 # 4) Write fresh CSV
 write_csv(genes_for_sql, "Genes_for_SQL_final.csv")
@@ -393,13 +367,6 @@ association dataset.
 3.  **Data standardisation**: Renames columns to match SQL conventions
     and converts literal "NA" strings to proper NA values
 
-**Output structure:** - `disease_id` - Disease Ontology identifier
-(DOID, primary key) - `disease_term` - Human-readable disease name
-
-**Purpose**: Provides a normalised reference table for all diseases
-mentioned in the dataset. This table serves as the foundation for
-disease-gene associations and disease-OMIM mappings, ensuring consistent
-disease terminology across the database.
 
 ```{r}
 
@@ -413,7 +380,6 @@ diseases_for_sql <- disease %>%
   rename(disease_id = do_disease_id) %>%
   mutate(across(everything(), ~ na_if(., "NA")))
 
-# Sanity: should be NO duplicates now
 # diseases_for_sql %>% count(disease_id) %>% filter(n > 1)
 
 write_csv(diseases_for_sql, "Diseases_for_SQL.csv")
@@ -444,15 +410,6 @@ Inheritance in Man) identifiers.
 
 4.  **Data cleaning**: Standardises literal "NA" strings to proper NA
     values
-
-**Output structure:** - `disease_id` = Disease Ontology identifier
-(foreign key to Diseases) - `omim_id` = OMIM identifier for the disease
-
-**Purpose**: Establishes the many : many relationship between diseases
-and OMIM entries. A single disease may have multiple OMIM identifiers,
-and this table captures all such associations, enabling
-cross-referencing between Disease Ontology and OMIM databases for
-enhanced disease annotation.
 
 ```{r}
 
@@ -500,15 +457,6 @@ between genetic variants and disease phenotypes.
 4.  **Data standardisation**: Cleans literal "NA" strings and formats
     columns for SQL import
 
-**Output structure:** - `gene_accession_id` - MGI identifier (foreign
-key to Genes) - `disease_id` - Disease Ontology identifier (foreign key
-to Diseases)
-
-**Purpose**: Captures the known associations between mouse genes and
-human diseases, enabling queries about which genes are implicated in
-specific diseases or which diseases are associated with particular
-genes. The referential integrity check ensures the database remains
-consistent by excluding orphaned associations.
 
 ```{r}
 
@@ -521,7 +469,7 @@ gene_diseases_for_sql <- disease %>%
     disease_id        = do_disease_id
   ) %>%
   distinct() %>%
-  # keep only gene IDs that exist in Genes_for_SQL (FK safety)
+  # keep only gene IDs that exist in Genes_for_SQL 
   semi_join(genes_for_sql, by = "gene_accession_id") %>%
   mutate(across(everything(), ~ na_if(., "NA")))
 
