@@ -40,7 +40,7 @@ replace empty text with NA, standardise spacing inside text and convert text to 
 
 ```{r}
 df$description[df$description == ""] <- NA
-df$description <- gsub(" ", " ", df$description, fixed = TRUE)
+df$description <- gsub("&nbsp;", " ", df$description, fixed = TRUE)
 df$description <- tolower(df$description)
 ```
 
