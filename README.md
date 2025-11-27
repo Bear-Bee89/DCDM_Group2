@@ -19,9 +19,8 @@ DCDM_Group2/
 ├── database2/              # Database artifacts and SQL dumps
 │   └── DUMP                # MySQL database dump file
 ├── outputs/                # Generated CSVs for SQL import and intermediate data
-├── scripts/                # Source code for Data Cleaning, SQL Prep, and Shiny App
-│   ├── app.R                                   # Main R Shiny Dashboard application
-│   ├── IMPC_APP.R                              # (Backup/Alternative) App script
+├── scripts/                # Source code for Data Cleaning, SQL Prep, and Shiny App                                 
+│   ├── IMPC_APP.R                              
 │   ├── R_script_for _SQL_import.Rmd            # Final preparation of CSVs for SQL LOAD DATA
 │   ├── STEP1_rawdata_establish.Rmd             # Initial raw data loading
 │   ├── STEP2_cleaning_Disease_information.Rmd  # Cleaning disease ontology data
@@ -30,6 +29,7 @@ DCDM_Group2/
 │   └── STEP3_parameter_groupings.Rmd           # Categorising parameters (e.g., "Metabolism")
 ├── SMOKE_TEST.txt          # System integrity test file
 └── .gitignore              # Git ignore configuration
+```
 
 ## Prerequisites
 
